@@ -1,0 +1,41 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Environments
+venv/
+env/
+.env
+
+# MacOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+
+# Testing/Coverage
+.coverage
+htmlcov/
+
+# Project Specific
+*.log
+*.wav
+*.mp3
+base64_input.txt
+data/
+debug_detector.py
+verify_sarvam_logic.py
+test_api.py
+test_base64.py
+test_latency_logic.py
+test_sarvam.py
+benchmark.py
+download_model.py
+railway.json

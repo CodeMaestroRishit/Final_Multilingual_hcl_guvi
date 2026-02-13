@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vaani Rekha — Voice Fraud Guard</title>
+    <meta name="description" content="India's first multilingual AI voice fraud detection system">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- Animated Background -->
+    <div class="bg-grid"></div>
+    <div class="bg-glow glow-1"></div>
+    <div class="bg-glow glow-2"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">🛡️</div>
+            <div>
+                <h1 class="logo-text">Vaani Rekha</h1>
+                <span class="logo-sub">वाणी रेखा · Voice Guard</span>
+            </div>
+        </div>
+        <div class="status-badge">
+            <span class="status-dot"></span>
+            API Live
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Upload Section -->
+        <section class="upload-section">
+            <div class="upload-card" id="uploadCard">
+                <div class="upload-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                </div>
+                <h2 class="upload-title">Analyze Voice Audio</h2>
+                <p class="upload-desc">Drop an audio file or click to upload</p>
+                <p class="upload-formats">WAV · MP3 · WEBM · OGG · M4A</p>
+                <input type="file" id="fileInput" accept="audio/*" hidden>
+            </div>
+
+            <!-- File Info Bar -->
+            <div class="file-info" id="fileInfo" style="display:none;">
+                <div class="file-meta">
+                    <span class="file-icon">🎵</span>
+                    <span class="file-name" id="fileName"></span>
+                    <span class="file-size" id="fileSize"></span>
+                </div>
+                <button class="clear-btn" id="clearBtn" title="Remove file">✕</button>
+            </div>
+
+            <!-- API Key (required, hidden) -->
+            <div class="api-key-row">
+                <label for="apiKey">🔑 API Key</label>
+                <input type="password" id="apiKey" value="" placeholder="Enter your API key">
+            </div>
+
+            <!-- Analyze Button -->
+            <button class="analyze-btn" id="analyzeBtn" disabled>
+                <span class="btn-text">Analyze Voice</span>
+                <span class="btn-loader" style="display:none;">
+                    <span class="spinner"></span>
+                    Analyzing...
+                </span>
+            </button>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display:none;">
+            <!-- Primary Verdict -->
+            <div class="verdict-card" id="verdictCard">
+                <div class="verdict-header">
+                    <div class="verdict-icon" id="verdictIcon"></div>
+                    <div>
+                        <div class="verdict-label">VERDICT</div>
+                        <div class="verdict-text" id="verdictText"></div>
+                    </div>
+                </div>
+                <div class="verdict-stats">
+                    <div class="stat">
+                        <span class="stat-label">Classification</span>
+                        <span class="stat-value" id="statClassification"></span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Risk Level</span>
+                        <span class="stat-value" id="statRisk"></span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Confidence</span>
+                        <span class="stat-value" id="statConfidence"></span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Language</span>
+                        <span class="stat-value" id="statLanguage"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Confidence Gauge -->
+            <div class="gauge-card">
+                <h3 class="card-title">AI Probability</h3>
+                <div class="gauge-container">
+                    <div class="gauge-bar">
+                        <div class="gauge-fill" id="gaugeFill"></div>
+                    </div>
+                    <div class="gauge-labels">
+                        <span>Human</span>
+                        <span class="gauge-value" id="gaugeValue"></span>
+                        <span>AI</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcription -->
+            <div class="transcript-card" id="transcriptCard" style="display:none;">
+                <h3 class="card-title">📝 Transcription</h3>
+                <div class="transcript-original" id="transcriptOriginal"></div>
+                <div class="transcript-translation" id="transcriptTranslation" style="display:none;">
+                    <span class="translation-label">English Translation</span>
+                    <div id="translationText"></div>
+                </div>
+            </div>
+
+            <!-- Fraud Keywords -->
+            <div class="keywords-card" id="keywordsCard" style="display:none;">
+                <h3 class="card-title">🚨 Fraud Keywords Detected</h3>
+                <div class="keywords-list" id="keywordsList"></div>
+            </div>
+
+            <!-- Explanation -->
+            <div class="explanation-card">
+                <h3 class="card-title">🔍 Analysis Breakdown</h3>
+                <p class="explanation-text" id="explanationText"></p>
+            </div>
+        </section>
+
+        <!-- Error -->
+        <div class="error-card" id="errorCard" style="display:none;">
+            <span class="error-icon">⚠️</span>
+            <span class="error-text" id="errorText"></span>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>Vaani Rekha · Built for HCL x GUVI Hackathon 2026</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
