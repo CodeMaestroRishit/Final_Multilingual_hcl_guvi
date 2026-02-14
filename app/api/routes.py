@@ -79,10 +79,13 @@ async def detect_voice(request: DetectRequest):
         
         # 2. Parallel Execution: Voice Analysis + Multi-Segment Sarvam STT
         
-        # A. MULTI-SEGMENT SARVAM: Send first 15s + last 15s in parallel
+        # A. SARVAM STT: Prefer last segment first (keywords usually appear later).
+        # Keep the segment shorter to reduce upload + STT latency.
         # Scam calls often have benign openings and fraud keywords later.
-        # By transcribing BOTH ends we catch keywords throughout the call.
-        SEGMENT_SECONDS = 15
+        # 12s is a better tradeoff: less likely to be just greetings, still faster than 15s+15s.
+        SEGMENT_SECONDS = 12
+        STT_TIMEOUT_SECONDS = 4.0
+        TRANSLATE_TIMEOUT_SECONDS = 1.0
         segment_samples = 16000 * SEGMENT_SECONDS
         
         def make_wav(audio_slice):
@@ -91,18 +94,16 @@ async def detect_voice(request: DetectRequest):
             sf.write(buf, audio_slice, 16000, format='WAV')
             return buf.getvalue()
         
-        segments = []
-        if len(audio_array) <= segment_samples * 2:
-            # Audio is short enough — send the whole thing as one segment
-            segments.append(("full", make_wav(audio_array)))
-            print(f"   → Short audio ({total_duration:.1f}s): sending as single segment")
-        else:
-            # Send first 15s and last 15s as separate parallel requests
-            first_segment = audio_array[:segment_samples]
+        long_audio = len(audio_array) > segment_samples * 2
+        if long_audio:
             last_segment = audio_array[-segment_samples:]
-            segments.append(("first_15s", make_wav(first_segment)))
-            segments.append(("last_15s", make_wav(last_segment)))
-            print(f"   → Long audio ({total_duration:.1f}s): sending FIRST 15s + LAST 15s in parallel")
+            stt_primary_name = f"last_{SEGMENT_SECONDS}s"
+            stt_primary_bytes = make_wav(last_segment)
+            print(f"   → Long audio ({total_duration:.1f}s): STT on LAST {SEGMENT_SECONDS}s first")
+        else:
+            stt_primary_name = "full"
+            stt_primary_bytes = make_wav(audio_array)
+            print(f"   → Short audio ({total_duration:.1f}s): STT on full audio")
         
         # B. Prepare audio for Voice Detector (Strictly < 6s to prevent timeouts)
         detector_limit = 16000 * 6
@@ -114,13 +115,13 @@ async def detect_voice(request: DetectRequest):
         # Define Tasks
         detector = get_detector()
         
-        # Start ALL Sarvam Tasks in parallel (IO Bound)
-        sarvam_tasks = []
-        for seg_name, seg_bytes in segments:
-            task = asyncio.create_task(
-                sarvam_client.detect_speech_async(seg_bytes, timeout_seconds=4.5)
+        # Start Sarvam STT in parallel with model inference.
+        stt_primary_task = asyncio.create_task(
+            sarvam_client.detect_speech_async(
+                stt_primary_bytes,
+                timeout_seconds=STT_TIMEOUT_SECONDS,
             )
-            sarvam_tasks.append((seg_name, task))
+        )
         
         # Run Voice Detector Task (CPU Bound) — runs concurrently with Sarvam
         loop = asyncio.get_event_loop()
@@ -132,39 +133,50 @@ async def detect_voice(request: DetectRequest):
             None # No transcript yet
         )
         
-        # Gather ALL Sarvam results (with remaining time budget)
+        # Gather STT result(s).
         transcripts = []
         sarvam_language = "unknown"
-        for seg_name, task in sarvam_tasks:
+
+        try:
+            sarvam_result = await asyncio.wait_for(stt_primary_task, timeout=STT_TIMEOUT_SECONDS + 0.2)
+            seg_transcript = sarvam_result.get("transcript", "")
+            seg_lang = sarvam_result.get("language", "unknown")
+            if seg_transcript:
+                transcripts.append(seg_transcript)
+                sarvam_language = seg_lang
+            print(f"   ✅ Segment '{stt_primary_name}': {len(seg_transcript)} chars, lang={seg_lang}")
+        except asyncio.TimeoutError:
+            print(f"   ⏱️  Segment '{stt_primary_name}' timed out.")
+        except Exception as e:
+            print(f"   ❌ Segment '{stt_primary_name}' failed: {e}")
+
+        # Fallback: if last segment produced no transcript, try the first segment with a smaller budget.
+        if long_audio and not transcripts:
             try:
-                elapsed = time.time() - start_time
-                remaining = 4.5 - elapsed
-                
-                if remaining > 0.1:
-                    sarvam_result = await asyncio.wait_for(task, timeout=remaining)
-                    seg_transcript = sarvam_result.get("transcript", "")
-                    seg_lang = sarvam_result.get("language", "unknown")
-                    if seg_transcript:
-                        transcripts.append(seg_transcript)
-                        sarvam_language = seg_lang  # Use last detected language
-                    print(f"   ✅ Segment '{seg_name}': {len(seg_transcript)} chars, lang={seg_lang}")
-                else:
-                    print(f"   ⚠️  Budget exhausted. Skipping segment '{seg_name}'.")
-                    task.cancel()
-                    
-            except asyncio.TimeoutError:
-                print(f"   ⏱️  Segment '{seg_name}' timed out.")
+                first_segment = audio_array[:segment_samples]
+                first_bytes = make_wav(first_segment)
+                fallback_timeout = 2.0
+                print(f"   → Fallback STT on FIRST {SEGMENT_SECONDS}s (timeout={fallback_timeout}s)")
+                sarvam_result = await sarvam_client.detect_speech_async(
+                    first_bytes,
+                    timeout_seconds=fallback_timeout,
+                )
+                seg_transcript = sarvam_result.get("transcript", "")
+                seg_lang = sarvam_result.get("language", "unknown")
+                if seg_transcript:
+                    transcripts.append(seg_transcript)
+                    sarvam_language = seg_lang
+                print(f"   ✅ Segment 'first_{SEGMENT_SECONDS}s': {len(seg_transcript)} chars, lang={seg_lang}")
             except Exception as e:
-                print(f"   ❌ Segment '{seg_name}' failed: {e}")
-        
-        # Merge transcripts from all segments
+                print(f"   ❌ Segment 'first_{SEGMENT_SECONDS}s' failed: {e}")
+
         transcript = " ".join(transcripts).strip()
         
         # --- Debug: Show what Sarvam returned ---
         sarvam_elapsed = time.time() - start_time
         print(f"\n{'='*50}")
         print(f"📊 SARVAM RESULT (total elapsed: {sarvam_elapsed:.2f}s)")
-        print(f"   Segments transcribed: {len(transcripts)}/{len(segments)}")
+        print(f"   Segments transcribed: {len(transcripts)}/{1 + (1 if (long_audio and not transcripts) else 0)}")
         print(f"   Full transcript: \"{transcript[:300]}{'...' if len(transcript) > 300 else ''}\"")
         print(f"   Language:   {sarvam_language}")
         print(f"{'='*50}")
@@ -182,9 +194,9 @@ async def detect_voice(request: DetectRequest):
                         sarvam_client.translate_text_async(
                             transcript, 
                             source_lang=sarvam_language,
-                            timeout_seconds=2.0
+                            timeout_seconds=TRANSLATE_TIMEOUT_SECONDS
                         ),
-                        timeout=2.0
+                        timeout=TRANSLATE_TIMEOUT_SECONDS + 0.1
                     )
                 except asyncio.TimeoutError:
                     print("⏱️  Translation timed out")
