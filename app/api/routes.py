@@ -216,108 +216,109 @@ async def detect_voice(request: DetectRequest):
         if transcript:
             voice_result["transcription"] = transcript
             voice_result["detected_language"] = sarvam_language
-            
-            # --- Translate to English (text-only, near-instant ~100-200ms) ---
+
+            def compute_risk_from_keywords(all_keywords: List[str]):
+                # Categorize keywords by their hit counts in the risk_categories
+                detector_cats = detector.risk_categories
+                hits = {cat: 0 for cat in detector_cats}
+
+                for kw_tag in all_keywords:
+                    # Format is "keyword (lang) [HIGH/LOW]" or just "keyword [HIGH/LOW]"
+                    kw_clean = kw_tag.split(" (")[0].split(" [")[0].lower()
+                    for cat, kw_list in detector_cats.items():
+                        if kw_clean in kw_list:
+                            hits[cat] += 1
+
+                risk_level = "LOW"
+                reasons_local: List[str] = []
+
+                # 🚨 HIGH SEVERITY RULES
+                if hits["secrets"] > 0:
+                    risk_level = "HIGH"
+                    reasons_local.append("Credential harvesting (OTP/PIN/Password) requested")
+
+                if hits["threats"] > 0 and (hits["cta"] > 0 or hits["secrets"] > 0 or hits["payments"] > 0):
+                    risk_level = "HIGH"
+                    reasons_local.append("Coercion detected: Threat paired with immediate action demand")
+
+                if hits["prizes"] > 0 and (hits["cta"] > 0 or hits["secrets"] > 0 or hits["payments"] > 0):
+                    risk_level = "HIGH"
+                    reasons_local.append("Financial hook: Prize/Reward paired with suspicious action")
+
+                if hits["payments"] > 0 and (hits["prizes"] > 0 or hits["generic"] > 0 or hits["institutions"] > 0):
+                    risk_level = "HIGH"
+                    reasons_local.append("Suspicious payment demand for verification or rewards")
+
+                if hits["premium"] > 0 and (hits["prizes"] > 0 or hits["threats"] > 0):
+                    risk_level = "HIGH"
+                    reasons_local.append("Premium-rate callback pattern detected with urgency/hook")
+
+                # ⚠️ MEDIUM SEVERITY FALLBACK
+                if risk_level != "HIGH":
+                    if hits["threats"] > 0 or hits["prizes"] > 0 or hits["payments"] > 0 or hits["premium"] > 0:
+                        risk_level = "MEDIUM"
+                        reasons_local.append("Suspicious patterns detected (Threats/Prizes/Payment context)")
+                    elif hits["institutions"] + hits["cta"] + hits["generic"] >= 2:
+                        risk_level = "MEDIUM"
+                        reasons_local.append("Multiple institutional/call-to-action keywords found")
+                    elif all_keywords:
+                        risk_level = "LOW"
+                        reasons_local.append("General banking context terms detected")
+
+                return risk_level, reasons_local
+
+            # --- Keyword Check (native first). Translation is now conditional for latency. ---
+            native_keywords, _, native_high, native_low = detector._check_keywords(transcript)
+            print(f"🔍 KEYWORD CHECK (native):  {len(native_keywords)} kw (HIGH={native_high}, LOW={native_low})")
+
+            all_keywords = list(set(native_keywords))
+            risk_level, reasons = compute_risk_from_keywords(all_keywords)
+
+            # Translate only if we couldn't confidently classify from native keywords.
             english_translation = ""
             translate_ms = None
-            if sarvam_language and sarvam_language != "en-IN":
+            should_translate = (
+                sarvam_language
+                and sarvam_language != "en-IN"
+                and risk_level == "LOW"
+                and (native_high == 0 and native_low < 2)
+            )
+
+            if should_translate:
                 try:
                     t_tr0 = time.time()
                     english_translation = await asyncio.wait_for(
                         sarvam_client.translate_text_async(
-                            transcript, 
+                            transcript,
                             source_lang=sarvam_language,
-                            timeout_seconds=TRANSLATE_TIMEOUT_SECONDS
+                            timeout_seconds=TRANSLATE_TIMEOUT_SECONDS,
                         ),
-                        timeout=TRANSLATE_TIMEOUT_SECONDS + 0.1
+                        timeout=TRANSLATE_TIMEOUT_SECONDS + 0.1,
                     )
                     translate_ms = round((time.time() - t_tr0) * 1000, 1)
                 except asyncio.TimeoutError:
                     translate_ms = round(TRANSLATE_TIMEOUT_SECONDS * 1000, 1)
                     print("⏱️  Translation timed out")
                 except Exception as e:
-                    translate_ms = round((time.time() - t_tr0) * 1000, 1) if 't_tr0' in locals() else None
+                    translate_ms = round((time.time() - t_tr0) * 1000, 1) if "t_tr0" in locals() else None
                     print(f"❌ Translation failed: {e}")
-            
+
             voice_result["english_translation"] = english_translation
-            
-            # --- Keyword Check: Run on BOTH native transcript AND English translation ---
-            # _check_keywords now returns (keywords, lang, high_count, low_count)
-            native_keywords, _, native_high, native_low = detector._check_keywords(transcript)
+
             if english_translation:
                 english_keywords, _, eng_high, eng_low = detector._check_keywords(english_translation)
-            else:
-                english_keywords, eng_high, eng_low = [], 0, 0
-            
-            # Merge and deduplicate
-            all_keywords = list(set(native_keywords + english_keywords))
-            total_high = native_high + eng_high
-            total_low = native_low + eng_low
+                print(f"🔍 KEYWORD CHECK (english): {len(english_keywords)} kw (HIGH={eng_high}, LOW={eng_low})")
+                all_keywords = list(set(all_keywords + english_keywords))
+                risk_level, reasons = compute_risk_from_keywords(all_keywords)
+
             voice_result["fraud_keywords"] = all_keywords
-            
-            print(f"🔍 KEYWORD CHECK (native):  {len(native_keywords)} kw (HIGH={native_high}, LOW={native_low})")
-            print(f"🔍 KEYWORD CHECK (english): {len(english_keywords)} kw (HIGH={eng_high}, LOW={eng_low})")
-            print(f"🔍 KEYWORD CHECK (merged):  {len(all_keywords)} kw (HIGH={total_high}, LOW={total_low})")
-            
-            # --- Rule-Based Tiered Risk Decision ---
-            # Categorize keywords by their hit counts in the risk_categories
-            detector_cats = detector.risk_categories
-            hits = {cat: 0 for cat in detector_cats}
-            found_by_cat = {cat: [] for cat in detector_cats}
-            
-            for kw_tag in all_keywords:
-                # Format is "keyword (lang) [HIGH/LOW]" or just "keyword [HIGH/LOW]"
-                kw_clean = kw_tag.split(" (")[0].split(" [")[0].lower()
-                for cat, kw_list in detector_cats.items():
-                    if kw_clean in kw_list:
-                        hits[cat] += 1
-                        found_by_cat[cat].append(kw_tag)
-
-            risk_level = "LOW"
-            reasons = []
-
-            # 🚨 HIGH SEVERITY RULES
-            # Rule 1: Secrets (OTP/PIN/CVV) -> HIGH immediately
-            if hits["secrets"] > 0:
-                risk_level = "HIGH"
-                reasons.append("Credential harvesting (OTP/PIN/Password) requested")
-            
-            # Rule 2: Threat/Urgency + Action (CTA, Secrets, or Payments) -> HIGH
-            if hits["threats"] > 0 and (hits["cta"] > 0 or hits["secrets"] > 0 or hits["payments"] > 0):
-                risk_level = "HIGH"
-                reasons.append("Coercion detected: Threat paired with immediate action demand")
-            
-            # Rule 3: Prize/Reward + Hooks (CTA, Secret, or Payment) -> HIGH
-            if hits["prizes"] > 0 and (hits["cta"] > 0 or hits["secrets"] > 0 or hits["payments"] > 0):
-                risk_level = "HIGH"
-                reasons.append("Financial hook: Prize/Reward paired with suspicious action")
-            
-            # Rule 4: Payment demand + (Prize or Verification/Identity) -> HIGH
-            if hits["payments"] > 0 and (hits["prizes"] > 0 or hits["generic"] > 0 or hits["institutions"] > 0):
-                risk_level = "HIGH"
-                reasons.append("Suspicious payment demand for verification or rewards")
-
-            # Rule 5: Premium-rate patterns + (Prize or Urgency) -> HIGH
-            if hits["premium"] > 0 and (hits["prizes"] > 0 or hits["threats"] > 0):
-                risk_level = "HIGH"
-                reasons.append("Premium-rate callback pattern detected with urgency/hook")
-
-            # ⚠️ MEDIUM SEVERITY FALLBACK
-            if risk_level != "HIGH":
-                # Any high-risk category hit (Threat, Prize, Payment, Premium)
-                if hits["threats"] > 0 or hits["prizes"] > 0 or hits["payments"] > 0 or hits["premium"] > 0:
-                    risk_level = "MEDIUM"
-                    reasons.append("Suspicious patterns detected (Threats/Prizes/Payment context)")
-                # Multiple context keywords (Institutions, CTA, Generic)
-                elif hits["institutions"] + hits["cta"] + hits["generic"] >= 2:
-                    risk_level = "MEDIUM"
-                    reasons.append("Multiple institutional/call-to-action keywords found")
-                elif all_keywords:
-                    risk_level = "LOW"
-                    reasons.append("General banking context terms detected")
+            print(f"🔍 KEYWORD CHECK (merged):  {len(all_keywords)} kw")
 
             voice_result["overall_risk"] = risk_level
-            voice_result["explanation"] += f", {risk_level} RISK — " + ("; ".join(reasons) if reasons else "Keyword context: " + ", ".join(all_keywords))
+            voice_result["explanation"] += (
+                f", {risk_level} RISK — "
+                + ("; ".join(reasons) if reasons else "Keyword context: " + ", ".join(all_keywords))
+            )
 
         else:
             print("⚠️  No transcript from Sarvam — keyword detection skipped")

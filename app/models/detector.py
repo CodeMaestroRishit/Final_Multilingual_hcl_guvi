@@ -62,18 +62,42 @@ class VoiceDetector:
                 "password", "netbanking", "credentials",
                 "screen share", "anydesk", "teamviewer",
                 "sms code", "verification code", "tell the code",
+                # Hindi (Devanagari)
+                "ओटीपी", "पिन", "पासवर्ड",
+                # Tamil
+                "ஓடீபி", "ஒடிபி", "பின்", "பாஸ்வர்ட்",
+                # Telugu
+                "ఓటీపీ", "పిన్", "పాస్వర్డ్",
+                # Malayalam
+                "ഒടിപി", "പിൻ", "പാസ്‌വേർഡ്",
             ],
             "threats": [
                 "account will be blocked", "account blocked", "sim will be deactivated",
                 "final notice", "last chance", "immediately", "urgent",
                 "before lines close", "within 1 hour", "within 2 hours",
                 "within 24 hours", "within 23 hours",
+                # Hindi (Devanagari)
+                "ब्लॉक", "तुरंत",
+                # Tamil
+                "அவசரம்",
+                # Telugu
+                "అత్యవసరం",
+                # Malayalam
+                "അടിയന്തിരം",
             ],
             "prizes": [
                 "you have won", "you won", "congratulations you are selected",
                 "congratulations", "claim your prize", "prize", "cash reward",
                 "reward", "lottery", "lucky draw", "bonus caller",
                 "free holiday", "voucher",
+                # Hindi (Devanagari)
+                "लॉटरी",
+                # Tamil
+                "பரிசு",
+                # Telugu
+                "బహుమతి",
+                # Malayalam
+                "സമ്‌മാനം",
             ],
             "payments": [
                 "pay now", "pay on this", "send money", "transfer money",
@@ -87,13 +111,31 @@ class VoiceDetector:
                 "bank", "sbi", "hdfc", "icici", "axis", "union bank", 
                 "customer care", "manager", "verification", "statement", "kyc", 
                 "bhim", "upi upgrade", "account"
+                ,
+                # Hindi (Devanagari)
+                "बैंक", "खाता", "कार्ड",
+                # Tamil (common loanwords in scam calls)
+                "வங்கி", "பேங்க்", "அக்கவுண்ட்", "கணக்கு", "கஸ்டமர்", "கஸ்டமர் கேர்",
+                # Telugu
+                "ఖాతా", "బ్యాం‌క్",
+                # Malayalam
+                "അക്കൗണ്ട്", "ബാങ്ക്",
             ],
             "cta": [
                 "call now", "call this number", "call immediately",
                 "click link", "click here", "visit website",
+                # Hindi (Devanagari)
+                "वेरिफाई",
+                # Tamil
+                "வெரிஃபை",
             ],
             "generic": [
                 "suspicious", "security", "verify", "identity", "activity"
+                ,
+                # Hindi (Devanagari)
+                "नंबर",
+                # Tamil
+                "அன்ஆத்தரைஸ்டா",
             ]
         }
 
@@ -586,18 +628,42 @@ class KeywordOnlyDetector:
                 "password", "netbanking", "credentials",
                 "screen share", "anydesk", "teamviewer",
                 "sms code", "verification code", "tell the code",
+                # Hindi (Devanagari)
+                "ओटीपी", "पिन", "पासवर्ड",
+                # Tamil
+                "ஓடீபி", "ஒடிபி", "பின்", "பாஸ்வர்ட்",
+                # Telugu
+                "ఓటీపీ", "పిన్", "పాస్వర్డ్",
+                # Malayalam
+                "ഒടിപി", "പിൻ", "പാസ്‌വേർഡ്",
             ],
             "threats": [
                 "account will be blocked", "account blocked", "sim will be deactivated",
                 "final notice", "last chance", "immediately", "urgent",
                 "before lines close", "within 1 hour", "within 2 hours",
                 "within 24 hours", "within 23 hours",
+                # Hindi (Devanagari)
+                "ब्लॉक", "तुरंत",
+                # Tamil
+                "அவசரம்",
+                # Telugu
+                "అత్యవసరం",
+                # Malayalam
+                "അടിയന്തിരം",
             ],
             "prizes": [
                 "you have won", "you won", "congratulations you are selected",
                 "congratulations", "claim your prize", "prize", "cash reward",
                 "reward", "lottery", "lucky draw", "bonus caller",
                 "free holiday", "voucher",
+                # Hindi (Devanagari)
+                "लॉटरी",
+                # Tamil
+                "பரிசு",
+                # Telugu
+                "బహుమతి",
+                # Malayalam
+                "സമ്‌മാനം",
             ],
             "payments": [
                 "pay now", "pay on this", "send money", "transfer money",
@@ -610,13 +676,31 @@ class KeywordOnlyDetector:
                 "bank", "sbi", "hdfc", "icici", "axis", "union bank",
                 "customer care", "manager", "verification", "statement", "kyc",
                 "bhim", "upi upgrade", "account"
+                ,
+                # Hindi (Devanagari)
+                "बैंक", "खाता", "कार्ड",
+                # Tamil
+                "வங்கி", "பேங்க்", "அக்கவுண்ட்", "கணக்கு", "கஸ்டமர்", "கஸ்டமர் கேர்",
+                # Telugu
+                "ఖాతా", "బ్యాం‌క్",
+                # Malayalam
+                "അക്കൗണ്ട്", "ബാങ്ക്",
             ],
             "cta": [
                 "call now", "call this number", "call immediately",
                 "click link", "click here", "visit website",
+                # Hindi (Devanagari)
+                "वेरिफाई",
+                # Tamil
+                "வெரிஃபை",
             ],
             "generic": [
                 "suspicious", "security", "verify", "identity", "activity"
+                ,
+                # Hindi (Devanagari)
+                "नंबर",
+                # Tamil
+                "அன்ஆத்தரைஸ்டா",
             ]
         }
 
