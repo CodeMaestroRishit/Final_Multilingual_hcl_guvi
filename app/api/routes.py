@@ -41,6 +41,12 @@ class TranscriptInfo(BaseModel):
 class Diagnostics(BaseModel):
     audio_duration_seconds: float
     processing_time_ms: Optional[float] = None
+    decode_ms: Optional[float] = None
+    voice_model_ms: Optional[float] = None
+    stt_ms: Optional[float] = None
+    translate_ms: Optional[float] = None
+    stt_status: Optional[str] = None  # "ok" | "timeout" | "error" | "empty" | "skipped"
+    stt_segment: Optional[str] = None
     pitch_human_score: Optional[float] = 0.0
     metadata_flag: Optional[str] = None
 
@@ -65,12 +71,14 @@ async def detect_voice(request: DetectRequest):
         )
     
     try:
+        t_decode0 = time.time()
         # 1. Load FULL audio (no duration cap) for Sarvam keyword detection
         # Scam keywords often appear later in the call (e.g., "OTP", "password"),
         # so we must NOT prune the audio for transcription.
         audio_array, metadata = process_audio_input(
             request.audio_base64, request.audio_url, max_duration=None
         )
+        decode_ms = round((time.time() - t_decode0) * 1000, 1)
         if audio_array is None or (hasattr(audio_array, "size") and audio_array.size == 0):
             raise HTTPException(status_code=400, detail="Audio decode produced no samples")
         
@@ -85,7 +93,9 @@ async def detect_voice(request: DetectRequest):
         # 12s is a better tradeoff: less likely to be just greetings, still faster than 15s+15s.
         SEGMENT_SECONDS = 12
         STT_TIMEOUT_SECONDS = 4.0
-        TRANSLATE_TIMEOUT_SECONDS = 1.0
+        # Translation is needed for robust keyword detection when STT returns native-script text.
+        # Keep a slightly larger timeout; Sarvam translate is usually fast, but can spike.
+        TRANSLATE_TIMEOUT_SECONDS = 2.0
         segment_samples = 16000 * SEGMENT_SECONDS
         
         def make_wav(audio_slice):
@@ -116,14 +126,19 @@ async def detect_voice(request: DetectRequest):
         detector = get_detector()
         
         # Start Sarvam STT in parallel with model inference.
+        t_stt0 = time.time()
+        stt_ms = None
+        stt_status = "skipped"
         stt_primary_task = asyncio.create_task(
             sarvam_client.detect_speech_async(
                 stt_primary_bytes,
                 timeout_seconds=STT_TIMEOUT_SECONDS,
             )
         )
+        stt_status = "pending"
         
         # Run Voice Detector Task (CPU Bound) — runs concurrently with Sarvam
+        t_model0 = time.time()
         loop = asyncio.get_event_loop()
         voice_result = await loop.run_in_executor(
             None, 
@@ -132,6 +147,7 @@ async def detect_voice(request: DetectRequest):
             metadata, 
             None # No transcript yet
         )
+        voice_model_ms = round((time.time() - t_model0) * 1000, 1)
         
         # Gather STT result(s).
         transcripts = []
@@ -139,15 +155,23 @@ async def detect_voice(request: DetectRequest):
 
         try:
             sarvam_result = await asyncio.wait_for(stt_primary_task, timeout=STT_TIMEOUT_SECONDS + 0.2)
+            stt_ms = round((time.time() - t_stt0) * 1000, 1)
             seg_transcript = sarvam_result.get("transcript", "")
             seg_lang = sarvam_result.get("language", "unknown")
             if seg_transcript:
                 transcripts.append(seg_transcript)
                 sarvam_language = seg_lang
+                stt_status = "ok"
+            else:
+                stt_status = "empty"
             print(f"   ✅ Segment '{stt_primary_name}': {len(seg_transcript)} chars, lang={seg_lang}")
         except asyncio.TimeoutError:
+            stt_ms = round((time.time() - t_stt0) * 1000, 1)
+            stt_status = "timeout"
             print(f"   ⏱️  Segment '{stt_primary_name}' timed out.")
         except Exception as e:
+            stt_ms = round((time.time() - t_stt0) * 1000, 1)
+            stt_status = "error"
             print(f"   ❌ Segment '{stt_primary_name}' failed: {e}")
 
         # Fallback: if last segment produced no transcript, try the first segment with a smaller budget.
@@ -157,17 +181,24 @@ async def detect_voice(request: DetectRequest):
                 first_bytes = make_wav(first_segment)
                 fallback_timeout = 2.0
                 print(f"   → Fallback STT on FIRST {SEGMENT_SECONDS}s (timeout={fallback_timeout}s)")
+                t_stt_fb0 = time.time()
                 sarvam_result = await sarvam_client.detect_speech_async(
                     first_bytes,
                     timeout_seconds=fallback_timeout,
                 )
+                stt_ms = round((time.time() - t_stt_fb0) * 1000, 1)
                 seg_transcript = sarvam_result.get("transcript", "")
                 seg_lang = sarvam_result.get("language", "unknown")
                 if seg_transcript:
                     transcripts.append(seg_transcript)
                     sarvam_language = seg_lang
+                    stt_status = "ok"
+                    stt_primary_name = f"first_{SEGMENT_SECONDS}s"
+                else:
+                    stt_status = "empty"
                 print(f"   ✅ Segment 'first_{SEGMENT_SECONDS}s': {len(seg_transcript)} chars, lang={seg_lang}")
             except Exception as e:
+                stt_status = "error"
                 print(f"   ❌ Segment 'first_{SEGMENT_SECONDS}s' failed: {e}")
 
         transcript = " ".join(transcripts).strip()
@@ -188,8 +219,10 @@ async def detect_voice(request: DetectRequest):
             
             # --- Translate to English (text-only, near-instant ~100-200ms) ---
             english_translation = ""
+            translate_ms = None
             if sarvam_language and sarvam_language != "en-IN":
                 try:
+                    t_tr0 = time.time()
                     english_translation = await asyncio.wait_for(
                         sarvam_client.translate_text_async(
                             transcript, 
@@ -198,9 +231,12 @@ async def detect_voice(request: DetectRequest):
                         ),
                         timeout=TRANSLATE_TIMEOUT_SECONDS + 0.1
                     )
+                    translate_ms = round((time.time() - t_tr0) * 1000, 1)
                 except asyncio.TimeoutError:
+                    translate_ms = round(TRANSLATE_TIMEOUT_SECONDS * 1000, 1)
                     print("⏱️  Translation timed out")
                 except Exception as e:
+                    translate_ms = round((time.time() - t_tr0) * 1000, 1) if 't_tr0' in locals() else None
                     print(f"❌ Translation failed: {e}")
             
             voice_result["english_translation"] = english_translation
@@ -340,6 +376,12 @@ async def detect_voice(request: DetectRequest):
             "diagnostics": {
                 "audio_duration_seconds": voice_result.get("audio_duration_seconds", 0.0),
                 "processing_time_ms": processing_time,
+                "decode_ms": decode_ms,
+                "voice_model_ms": voice_model_ms,
+                "stt_ms": stt_ms,
+                "translate_ms": translate_ms if transcript else None,
+                "stt_status": stt_status,
+                "stt_segment": stt_primary_name,
                 "pitch_human_score": voice_result.get("pitch_human_score", 0.0),
                 "metadata_flag": voice_result.get("metadata_flag", None),
             }

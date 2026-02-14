@@ -101,7 +101,7 @@ class VoiceDetector:
         self.multilingual_high = {
             "hindi_devanagari": ["ओटीपी", "पिन", "पासवर्ड", "ब्लॉक", "तुरंत", "लॉटरी"],
             "hindi_roman": ["otp", "pin", "band", "jald", "jaldi"],
-            "tamil_native": ["ஓடீபி", "பின்", "பாஸ்வர்ட்", "அவசரம்", "பரிசு"],
+            "tamil_native": ["ஓடீபி", "பின்", "பாஸ்வர்ட்", "அவசரம்", "பரிசு", "ஒடிபி"],
             "telugu_native": ["ఓటీపీ", "పిన్", "పాస్వర్డ్", "అత్యవసరం", "బహుమతి"],
             "malayalam_native": ["ഒടിപി", "പിൻ", "പാസ്‌വേർഡ്", "അടിയന്തിരം", "സമ്மானம்"],
         }
@@ -126,7 +126,7 @@ class VoiceDetector:
             ),
             "hindi_devanagari": ["बैंक", "खाता", "वेरिफाई", "नंबर", "कार्ड"],
             "hindi_roman": ["bank", "khata", "verify", "number"],
-            "tamil_native": ["கணக்கு", "வங்கி"],
+            "tamil_native": ["கணக்கு", "வங்கி", "பேங்க்", "அக்கவுண்ட்", "வெரிஃபை", "கஸ்டமர்", "கஸ்டமர் கேர்", "அன்ஆத்தரைஸ்டா"],
             "telugu_native": ["ఖాతా", "బ్యాంக்"],
             "malayalam_native": ["അക്കൗണ്ട്", "ബാങ്ക്"],
         }
@@ -339,23 +339,35 @@ class VoiceDetector:
         low_count = 0
         seen = set()
         
-        # Check HIGH risk keywords (whole-word match)
+        def _use_word_boundaries(kw: str) -> bool:
+            # Python's \\b word boundary is unreliable for many non-Latin scripts.
+            # Use it only for ASCII keywords; otherwise fall back to substring matching.
+            return kw.isascii()
+
+        # Check HIGH risk keywords
         for lang, keywords in self.high_risk_keywords.items():
             for kw in keywords:
-                # \b = word boundary -> prevents 'pin' matching inside 'capping'
-                pattern = r'\b' + re.escape(kw) + r'\b'
-                if re.search(pattern, transcript_lower):
+                if _use_word_boundaries(kw):
+                    pattern = r'\b' + re.escape(kw) + r'\b'
+                    hit = re.search(pattern, transcript_lower) is not None
+                else:
+                    hit = kw in transcript_lower
+                if hit:
                     tag = f"{kw} ({lang}) [HIGH]"
                     if tag not in seen:
                         found.append(tag)
                         seen.add(tag)
                         high_count += 1
         
-        # Check LOW risk keywords (whole-word match)
+        # Check LOW risk keywords
         for lang, keywords in self.low_risk_keywords.items():
             for kw in keywords:
-                pattern = r'\b' + re.escape(kw) + r'\b'
-                if re.search(pattern, transcript_lower):
+                if _use_word_boundaries(kw):
+                    pattern = r'\b' + re.escape(kw) + r'\b'
+                    hit = re.search(pattern, transcript_lower) is not None
+                else:
+                    hit = kw in transcript_lower
+                if hit:
                     tag = f"{kw} ({lang}) [LOW]"
                     if tag not in seen:
                         found.append(tag)
@@ -611,7 +623,7 @@ class KeywordOnlyDetector:
         self.multilingual_high = {
             "hindi_devanagari": ["ओटीपी", "पिन", "पासवर्ड", "ब्लॉक", "तुरंत", "लॉटरी"],
             "hindi_roman": ["otp", "pin", "band", "jald", "jaldi"],
-            "tamil_native": ["ஓடீபி", "பின்", "பாஸ்வர்ட்", "அவசரம்", "பரிசு"],
+            "tamil_native": ["ஓடீபி", "பின்", "பாஸ்வர்ட்", "அவசரம்", "பரிசு", "ஒடிபி"],
             "telugu_native": ["ఓటీపీ", "పిన్", "పాస్వర్డ్", "అత్యవసరం", "బహుమతి"],
             "malayalam_native": ["ഒടിപി", "പിൻ", "പാസ്‌വേർഡ്", "അടിയന്തിരം", "സമ്‌മാനം"],
         }
@@ -629,13 +641,14 @@ class KeywordOnlyDetector:
 
         self.low_risk_keywords = {
             "english": (
-                self.risk_categories["institutions"] +
-                self.risk_categories["cta"] +
+                self.risk_categories["institutions"] + 
+                self.risk_categories["cta"] + 
                 self.risk_categories["generic"]
             ),
             "hindi_devanagari": ["बैंक", "खाता", "वेरिफाई", "नंबर", "कार्ड"],
             "hindi_roman": ["bank", "khata", "verify", "number"],
-            "tamil_native": ["கணக்கு", "வங்கி"],
+            # Include common Tamil-script loanwords used in scam calls.
+            "tamil_native": ["கணக்கு", "வங்கி", "பேங்க்", "அக்கவுண்ட்", "வெரிஃபை", "கஸ்டமர்", "கஸ்டமர் கேர்", "கஸ்டமர் கேர்", "அன்ஆத்தரைஸ்டா"],
             "telugu_native": ["ఖాతా", "బ్యాం‌క్"],
             "malayalam_native": ["അക്കൗണ്ട്", "ബാങ്ക്"],
         }
@@ -653,10 +666,17 @@ class KeywordOnlyDetector:
         low_count = 0
         seen = set()
 
+        def _use_word_boundaries(kw: str) -> bool:
+            return kw.isascii()
+
         for lang, keywords in self.high_risk_keywords.items():
             for kw in keywords:
-                pattern = r"\\b" + re.escape(kw) + r"\\b"
-                if re.search(pattern, transcript_lower):
+                if _use_word_boundaries(kw):
+                    pattern = r"\\b" + re.escape(kw) + r"\\b"
+                    hit = re.search(pattern, transcript_lower) is not None
+                else:
+                    hit = kw in transcript_lower
+                if hit:
                     tag = f"{kw} ({lang}) [HIGH]"
                     if tag not in seen:
                         found.append(tag)
@@ -665,8 +685,12 @@ class KeywordOnlyDetector:
 
         for lang, keywords in self.low_risk_keywords.items():
             for kw in keywords:
-                pattern = r"\\b" + re.escape(kw) + r"\\b"
-                if re.search(pattern, transcript_lower):
+                if _use_word_boundaries(kw):
+                    pattern = r"\\b" + re.escape(kw) + r"\\b"
+                    hit = re.search(pattern, transcript_lower) is not None
+                else:
+                    hit = kw in transcript_lower
+                if hit:
                     tag = f"{kw} ({lang}) [LOW]"
                     if tag not in seen:
                         found.append(tag)
