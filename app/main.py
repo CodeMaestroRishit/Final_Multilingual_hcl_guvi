@@ -48,10 +48,25 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    # Prompt example: "Invalid API key or malformed request"
+    # In production we keep the message generic (avoids leaking internals).
+    # In non-production we surface full validation details to make Postman/debugging easier.
+    app_env = os.getenv("APP_ENV", "production").lower()
+    debug_validation = os.getenv("DEBUG_VALIDATION_ERRORS", "").lower() in ("1", "true", "yes")
+    is_debug = debug_validation or app_env in ("dev", "development", "local")
+
+    if is_debug:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "status": "error",
+                "message": "Request validation failed",
+                "errors": exc.errors(),
+            },
+        )
+
     return JSONResponse(
-        status_code=400,
-        content={"status": "error", "message": "Invalid API key or malformed request"},
+        status_code=422,
+        content={"status": "error", "message": "Malformed request"},
     )
 
 @app.get("/health")
