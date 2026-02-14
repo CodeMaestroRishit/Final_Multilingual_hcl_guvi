@@ -1,15 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
-from app.api.auth import verify_api_key
-from app.utils.audio import process_audio_input
-from app.models.detector import get_detector
-from app.utils.sarvam import sarvam_client
 import asyncio
 import io
 import soundfile as sf
 import base64
 import time
+
+from app.api.auth import verify_api_key
+from app.utils.audio import process_audio_input
+from app.models.detector import get_detector
+from app.utils.sarvam import sarvam_client
 
 router = APIRouter()
 
@@ -52,6 +54,10 @@ class DetectResponse(BaseModel):
 
 @router.post("/detect", response_model=DetectResponse, dependencies=[Depends(verify_api_key)])
 async def detect_voice(request: DetectRequest):
+    start_time = time.time()
+    # Always initialize; the transcript branch is best-effort and can be empty in production.
+    reasons: List[str] = []
+    
     if not request.audio_base64 and not request.audio_url:
         raise HTTPException(
             status_code=400, 
@@ -109,7 +115,6 @@ async def detect_voice(request: DetectRequest):
         detector = get_detector()
         
         # Start ALL Sarvam Tasks in parallel (IO Bound)
-        start_time = time.time()
         sarvam_tasks = []
         for seg_name, seg_bytes in segments:
             task = asyncio.create_task(
@@ -166,7 +171,6 @@ async def detect_voice(request: DetectRequest):
         
         # If transcript found, translate to English and run keyword checks
         if transcript:
-            reasons = []
             voice_result["transcription"] = transcript
             voice_result["detected_language"] = sarvam_language
             
@@ -300,7 +304,7 @@ async def detect_voice(request: DetectRequest):
               f"keyword_fraud={is_keyword_fraud}, risk={risk_level}")
 
         # 4. Build Clean Structured Response
-        processing_time = round((time.time() * 1000) - (time.time() * 1000), 1)  # placeholder
+        processing_time = round((time.time() - start_time) * 1000, 1)
         
         return {
             "voice": {
@@ -334,6 +338,21 @@ async def detect_voice(request: DetectRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
+@router.post("/detect/file", response_model=DetectResponse, dependencies=[Depends(verify_api_key)])
+async def detect_voice_file(file: UploadFile = File(...)):
+    """
+    Postman-friendly endpoint: upload an audio file as multipart/form-data.
+
+    Field name: file
+    """
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # Reuse the existing JSON-base64 pathway to keep all logic identical.
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    return await detect_voice(DetectRequest(audio_base64=audio_b64))
+
 
 @router.get("/detect", response_model=DetectResponse, dependencies=[Depends(verify_api_key)])
 async def detect_get(audio_url: str):
@@ -344,7 +363,7 @@ async def detect_get(audio_url: str):
     # Create request object
     request = DetectRequest(audio_url=audio_url)
     # Call the existing logic (we can call the service directly or the function)
-    # Calling the service logic directly ensures cleaner execution stack
+    # Calling the function directly to reuse logic
     return await detect_voice(request)
 
 # --- Strict Hackathon Specification ---
@@ -360,8 +379,6 @@ class HackathonResponse(BaseModel):
     classification: str
     confidenceScore: float
     explanation: str
-
-from fastapi.responses import JSONResponse
 
 @router.post("/api/voice-detection", response_model=HackathonResponse, dependencies=[Depends(verify_api_key)])
 async def detect_voice_strict(request: HackathonRequest):
