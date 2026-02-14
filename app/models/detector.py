@@ -1,20 +1,37 @@
-import torch
+import os
 import numpy as np
 import librosa
-import torch
 import numpy as np
 import librosa
 # import noisereduce as nr (Disabled: causes artifacts)
 import io
 import requests
-from transformers import Wav2Vec2FeatureExtractor, AutoModelForAudioClassification, pipeline
-import torch.nn.functional as F
 from fastapi import HTTPException
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "y", "on")
+
+ML_DISABLED = _env_truthy("DISABLE_ML")
+
+if not ML_DISABLED:
+    import torch
+    import torch.nn.functional as F
+    from transformers import Wav2Vec2FeatureExtractor, AutoModelForAudioClassification, pipeline
+else:
+    # Avoid importing torch/transformers entirely in keyword-only mode.
+    torch = None  # type: ignore[assignment]
+    F = None  # type: ignore[assignment]
+    Wav2Vec2FeatureExtractor = None  # type: ignore[assignment]
+    AutoModelForAudioClassification = None  # type: ignore[assignment]
+    pipeline = None  # type: ignore[assignment]
 
 class VoiceDetector:
     _instance = None
     
     def __init__(self):
+        if ML_DISABLED or torch is None:
+            raise RuntimeError("ML is disabled (set DISABLE_ML=0 to enable model inference)")
+
         from torch.nn import CosineSimilarity
         self.cos_sim = CosineSimilarity(dim=1, eps=1e-6)
 
@@ -201,7 +218,7 @@ class VoiceDetector:
             chunks.append(y)
         return chunks
 
-    def _calculate_smoothness(self, embeddings: torch.Tensor) -> float:
+    def _calculate_smoothness(self, embeddings) -> float:
         """
         Calculates temporal smoothness.
         AI voices tend to have higher frame-to-frame cosine similarity (less 'jitter').
@@ -537,5 +554,146 @@ detector = None
 def get_detector():
     global detector
     if detector is None:
-        detector = VoiceDetector.get_instance()
+        detector = KeywordOnlyDetector() if ML_DISABLED else VoiceDetector.get_instance()
     return detector
+
+
+class KeywordOnlyDetector:
+    """
+    Lightweight detector for local debugging / environments where torch can't be imported.
+    This keeps `/detect` alive so you can test auth/validation/Postman without ML inference.
+    """
+
+    def __init__(self):
+        # Minimal subset required by routes.py.
+        # NOTE: Keep in sync with VoiceDetector.__init__ keyword definitions.
+        self.risk_categories = {
+            "secrets": [
+                "otp", "one time password", "tell me otp", "share otp", "send otp",
+                "cvv", "pin", "atm pin", "upi pin",
+                "password", "netbanking", "credentials",
+                "screen share", "anydesk", "teamviewer",
+                "sms code", "verification code", "tell the code",
+            ],
+            "threats": [
+                "account will be blocked", "account blocked", "sim will be deactivated",
+                "final notice", "last chance", "immediately", "urgent",
+                "before lines close", "within 1 hour", "within 2 hours",
+                "within 24 hours", "within 23 hours",
+            ],
+            "prizes": [
+                "you have won", "you won", "congratulations you are selected",
+                "congratulations", "claim your prize", "prize", "cash reward",
+                "reward", "lottery", "lucky draw", "bonus caller",
+                "free holiday", "voucher",
+            ],
+            "payments": [
+                "pay now", "pay on this", "send money", "transfer money",
+                "processing fee", "logistics charge", "deposit to receive",
+            ],
+            "premium": [
+                "premium", "landline", "charged per", "10ppm", "150p/min", "090", "087"
+            ],
+            "institutions": [
+                "bank", "sbi", "hdfc", "icici", "axis", "union bank",
+                "customer care", "manager", "verification", "statement", "kyc",
+                "bhim", "upi upgrade", "account"
+            ],
+            "cta": [
+                "call now", "call this number", "call immediately",
+                "click link", "click here", "visit website",
+            ],
+            "generic": [
+                "suspicious", "security", "verify", "identity", "activity"
+            ]
+        }
+
+        self.multilingual_high = {
+            "hindi_devanagari": ["ओटीपी", "पिन", "पासवर्ड", "ब्लॉक", "तुरंत", "लॉटरी"],
+            "hindi_roman": ["otp", "pin", "band", "jald", "jaldi"],
+            "tamil_native": ["ஓடீபி", "பின்", "பாஸ்வர்ட்", "அவசரம்", "பரிசு"],
+            "telugu_native": ["ఓటీపీ", "పిన్", "పాస్వర్డ్", "అత్యవసరం", "బహుమతి"],
+            "malayalam_native": ["ഒടിപി", "പിൻ", "പാസ്‌വേർഡ്", "അടിയന്തിരം", "സമ്‌മാനം"],
+        }
+
+        self.high_risk_keywords = {
+            "english": (
+                self.risk_categories["secrets"] +
+                self.risk_categories["threats"] +
+                self.risk_categories["prizes"] +
+                self.risk_categories["payments"] +
+                self.risk_categories["premium"]
+            ),
+            **self.multilingual_high
+        }
+
+        self.low_risk_keywords = {
+            "english": (
+                self.risk_categories["institutions"] +
+                self.risk_categories["cta"] +
+                self.risk_categories["generic"]
+            ),
+            "hindi_devanagari": ["बैंक", "खाता", "वेरिफाई", "नंबर", "कार्ड"],
+            "hindi_roman": ["bank", "khata", "verify", "number"],
+            "tamil_native": ["கணக்கு", "வங்கி"],
+            "telugu_native": ["ఖాతా", "బ్యాం‌క్"],
+            "malayalam_native": ["അക്കൗണ്ട്", "ബാങ്ക്"],
+        }
+
+    def _check_keywords(self, transcript: str):
+        # Copied logic from VoiceDetector._check_keywords
+        import re
+
+        if not transcript:
+            return [], "unknown", 0, 0
+
+        transcript_lower = transcript.lower()
+        found = []
+        high_count = 0
+        low_count = 0
+        seen = set()
+
+        for lang, keywords in self.high_risk_keywords.items():
+            for kw in keywords:
+                pattern = r"\\b" + re.escape(kw) + r"\\b"
+                if re.search(pattern, transcript_lower):
+                    tag = f"{kw} ({lang}) [HIGH]"
+                    if tag not in seen:
+                        found.append(tag)
+                        seen.add(tag)
+                        high_count += 1
+
+        for lang, keywords in self.low_risk_keywords.items():
+            for kw in keywords:
+                pattern = r"\\b" + re.escape(kw) + r"\\b"
+                if re.search(pattern, transcript_lower):
+                    tag = f"{kw} ({lang}) [LOW]"
+                    if tag not in seen:
+                        found.append(tag)
+                        seen.add(tag)
+                        low_count += 1
+
+        return found, "multilingual", high_count, low_count
+
+    def detect_fraud(self, input_audio, metadata=None, transcript=None):
+        try:
+            audio_len = len(input_audio) if hasattr(input_audio, "__len__") else 0
+        except Exception:
+            audio_len = 0
+
+        audio_duration_seconds = round(audio_len / 16000, 2) if audio_len else 0.0
+
+        return {
+            "classification": "Human",
+            "confidence_score": 0.5,
+            "ai_probability": 0.0,
+            "detected_language": "unknown",
+            "transcription": transcript or "",
+            "english_translation": "",
+            "fraud_keywords": [],
+            "overall_risk": "LOW",
+            "explanation": "ML disabled (DISABLE_ML=1): keyword-only mode",
+            "audio_duration_seconds": audio_duration_seconds,
+            "pitch_human_score": 0.0,
+            "metadata_flag": None,
+        }

@@ -17,7 +17,10 @@ from fastapi import Request, HTTPException
 async def lifespan(app: FastAPI):
     # Load model on startup
     print("Initializing application...")
-    VoiceDetector.get_instance()
+    if os.getenv("DISABLE_ML", "").strip().lower() not in ("1", "true", "yes", "y", "on"):
+        VoiceDetector.get_instance()
+    else:
+        print("DISABLE_ML=1 set; skipping model preload (keyword-only mode).")
     yield
     print("Shutting down...")
 

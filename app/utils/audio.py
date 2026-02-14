@@ -4,7 +4,6 @@ import librosa
 import numpy as np
 import requests
 import soundfile as sf
-import torch
 import av
 from fastapi import HTTPException
 
@@ -64,21 +63,28 @@ def decode_with_pyav(audio_bytes: bytes, target_sr: int = 16000, max_duration: f
         for frame in container.decode(stream):
             # Resample frame
             resampled_frames = resampler.resample(frame)
+            # resampler.resample returns a list of frames (or None)
             if resampled_frames:
-                # To numpy
-                chunk = resampled_frames.to_ndarray() # shape (1, samples)
-                chunk_len = chunk.shape[1]
-                
-                # Check limit
-                if max_samples and (total_samples + chunk_len > max_samples):
-                    # Slice the last chunk
-                    remaining = max_samples - total_samples
-                    audio_data.append(chunk[0][:remaining])
-                    total_samples += remaining
-                    break
-                else:
-                    audio_data.append(chunk[0])
-                    total_samples += chunk_len
+                for resampled_frame in resampled_frames:
+                    # To numpy
+                    chunk = resampled_frame.to_ndarray() # shape (1, samples)
+                    chunk_len = chunk.shape[1]
+                    
+                    # Check limit
+                    if max_samples and (total_samples + chunk_len > max_samples):
+                        # Slice the last chunk
+                        remaining = max_samples - total_samples
+                        audio_data.append(chunk[0][:remaining])
+                        total_samples += remaining
+                        # Break out of inner loop
+                        break
+                    else:
+                        audio_data.append(chunk[0])
+                        total_samples += chunk_len
+            
+            # Check global limit break
+            if max_samples and total_samples >= max_samples:
+                break
                 
         if not audio_data:
             raise ValueError("No audio data decoded")
